@@ -12,7 +12,7 @@
 ### 2.1 获取代码
 确保你已经拥有项目代码，并进入项目根目录：
 ```bash
-cd ai-grading
+cd auto-grading
 ```
 
 ### 2.2 安装依赖
@@ -81,4 +81,5 @@ conda activate ai-grading
 激活环境后，按照上文 **2.2 安装依赖** 开始继续操作即可：
 ```bash
 pip install -r requirements.txt
+
 ```
