@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MathJax Rendering Test</title>
+    <!-- Use Staticfile CDN for better access in China -->
+    <script src="https://cdn.staticfile.org/vue/3.3.4/vue.global.prod.min.js"></script>
+    <script src="https://cdn.staticfile.org/marked/9.1.2/marked.min.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true
+            },
+            svg: {
+                fontCache: 'global'
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.staticfile.org/mathjax/3.2.2/es5/tex-mml-chtml.js"></script>
+    <style>
+        body { padding: 20px; font-family: sans-serif; }
+        .container { display: flex; gap: 20px; }
+        .box { flex: 1; display: flex; flex-direction: column; }
+        textarea { height: 300px; padding: 10px; font-family: monospace; }
+        .output { border: 1px solid #ccc; padding: 10px; min-height: 300px; background: #f9f9f9; }
+        .render-btn { margin-top: 10px; padding: 10px; cursor: pointer; background: #409EFF; color: white; border: none; border-radius: 4px; }
+        .status-text { margin-top: 10px; color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h1>MathJax Rendering Test</h1>
+        <p>Use this page to test if your LaTeX formulas are rendering correctly.</p>
+        <div class="container">
+            <div class="box">
+                <h3>Input (Markdown + LaTeX)</h3>
+                <textarea v-model="inputText" aria-label="Input Markdown Text"></textarea>
+                <button @click="manualRender" class="render-btn">Manual Render</button>
+            </div>
+            <div class="box">
+                <h3>Rendered Output</h3>
+                <div class="output" v-markdown="renderedText"></div>
+                <div class="status-text">Status: {{ status }}</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, nextTick } = Vue;
+
+        const app = createApp({
+            setup() {
+                const initialText = `Here is some text with inline math: $E=mc^2$.
+
+And a display equation:
+$$
+\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}
+$$
+
+Another style: \\( a^2 + b^2 = c^2 \\)
+
+--- OCR Result Source 1 ---
+Some text after separator.
+`;
+                const inputText = ref(initialText);
+                const renderedText = ref(initialText);
+                const status = ref('Ready');
+
+                // Expose status updater to global scope for the directive to use
+                window.updateRenderStatus = (msg) => {
+                    status.value = msg;
+                };
+
+                const manualRender = () => {
+                    status.value = 'Rendering...';
+                    renderedText.value = inputText.value;
+                    // Force update
+                    renderedText.value = '';
+                    nextTick(() => {
+                        renderedText.value = inputText.value;
+                    });
+                };
+
+                return { inputText, renderedText, manualRender, status };
+            }
+        });
+
+        const renderContent = (el, text) => {
+            if (!text) {
+                el.innerHTML = '';
+                return;
+            }
+            
+            try {
+                // Check if marked is available
+                if (typeof marked === 'undefined') {
+                    el.innerText = text;
+                    return;
+                }
+
+                // 0. Pre-process
+                let processedText = text.replace(/(--- OCR Result Source \d+ ---)/g, '\n\n**$1**\n\n');
+
+                // 1. Protect Math
+                const mathMap = {};
+                let mathId = 0;
+                
+                const replaceMath = (str, regex) => {
+                    return str.replace(regex, (match) => {
+                        const id = `MATHSECRET${mathId++}END`;
+                        mathMap[id] = match;
+                        return id;
+                    });
+                };
+
+                let protectedText = replaceMath(processedText, /\$\$([\s\S]+?)\$\$/g);
+                protectedText = replaceMath(protectedText, /\$([^$]+?)\$/g);
+                protectedText = replaceMath(protectedText, /\\\(([\s\S]+?)\\\)/g);
+                protectedText = replaceMath(protectedText, /\\\[([\s\S]+?)\\\]/g);
+
+                // 2. Markdown parse
+                let html = marked.parse(protectedText);
+
+                // 3. Restore Math
+                Object.keys(mathMap).forEach(id => {
+                    html = html.replace(id, () => mathMap[id]);
+                });
+
+                el.innerHTML = html;
+
+                // 4. MathJax typeset
+                if (window.MathJax && window.MathJax.typesetPromise) {
+                    window.MathJax.typesetPromise([el]).catch(err => console.error('MathJax error:', err));
+                }
+
+            } catch (e) {
+                console.error('Render logic error:', e);
+                el.innerText = text;
+            }
+        };
+
+        app.directive('markdown', {
+            mounted(el, binding) {
+                renderContent(el, binding.value);
+            },
+            updated(el, binding) {
+                if (binding.value !== binding.oldValue) {
+                    renderContent(el, binding.value);
+                }
+            }
+        });
+
+        app.mount('#app');
+    </script>

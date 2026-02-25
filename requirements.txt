@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+httpx
+python-multipart
+pydantic
+pydantic-settings
+langchain
+langchain-core
+langchain-deepseek
+pymupdf
+pillow
+sympy
+pandas
+openpyxl

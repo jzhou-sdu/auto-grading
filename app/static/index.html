@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 自动阅卷系统</title>
+    <!-- Element Plus CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', '微软雅黑', Arial, sans-serif;
+            background-color: #f5f7fa;
+        }
+        .header {
+            background-color: #fff;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            padding: 0 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 60px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 20px;
+            color: #409EFF;
+        }
+        .main-container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .question-card {
+            margin-bottom: 20px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .criteria-row {
+            margin-bottom: 10px;
+            align-items: center;
+        }
+        .total-score-tag {
+            margin-left: 10px;
+            font-weight: bold;
+        }
+        .step-actions {
+            margin-top: 30px;
+            text-align: center;
+            padding-bottom: 50px;
+        }
+        .input-area {
+            background: #fff;
+            padding: 20px;
+            border-radius: 4px;
+            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+    </style>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Element Plus -->
+    <script src="https://unpkg.com/element-plus"></script>
+    <!-- Element Plus Icons -->
+    <script src="https://unpkg.com/@element-plus/icons-vue"></script>
+    <!-- Axios -->
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <!-- SheetJS (Excel Export) -->
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+    <!-- JSZip (Zip Export) -->
+    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+    <!-- FileSaver (Save Files) -->
+    <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+    <!-- Marked (Markdown Parser) -->
+    <script src="https://cdn.staticfile.org/marked/9.1.2/marked.min.js"></script>
+    <!-- MathJax (LaTeX Rendering) -->
+    <script>
+        window.MathJax = {
+            loader: {load: ['[tex]/boldsymbol']},
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true,
+                packages: {'[+]': ['boldsymbol']}
+            },
+            svg: {
+                fontCache: 'global'
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.staticfile.org/mathjax/3.2.2/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+    <div id="app">
+        <div class="header">
+            <div style="display: flex; align-items: center;">
+                <h1 style="margin-right: 20px;">AI 自动阅卷系统</h1>
+                <el-button-group>
+                    <el-button type="primary" plain icon="Download" size="small" @click="saveState">保存状态</el-button>
+                    <el-button type="warning" plain icon="Upload" size="small" @click="triggerLoadState">加载状态</el-button>
+                    <el-button type="danger" plain icon="Delete" size="small" @click="clearAll">清空</el-button>
+                </el-button-group>
+                <input type="file" ref="stateFileInput" style="display: none" @change="loadState" accept=".zip">
+            </div>
+            <el-steps :active="activeStep" simple style="width: 400px">
+                <el-step title="出题与设置" icon="Edit"></el-step>
+                <el-step title="阅卷与结果" icon="Upload"></el-step>
+            </el-steps>
+        </div>
+
+        <div class="main-container">
+            <!-- 步骤 1: 出题与设置 -->
+            <div v-if="activeStep === 0">
+                <div class="input-area">
+                    <h3 style="margin-bottom: 15px;">1. 题目来源</h3>
+                    <el-input
+                        v-model="questionsText"
+                        :rows="6"
+                        type="textarea"
+                        placeholder="请输入物理题目，支持多道题目（按题号分隔，如：一、... 二、... 或 1. ... 2. ...）"
+                    ></el-input>
+                    
+                    <div style="margin-top: 15px; text-align: right;">
+                        <el-button link type="info" @click="showLogs" v-if="generationLogs.length > 0" style="margin-right: 10px; font-size: 12px;">
+                            <el-icon><Document /></el-icon> 查看生成日志
+                        </el-button>
+                        <el-button type="primary" @click="generateAnswers" :loading="generating" icon="MagicStick">
+                            AI 生成答案与评分标准
+                        </el-button>
+                    </div>
+                </div>
+
+                <!-- 日志对话框 -->
+                <el-dialog v-model="logsVisible" title="AI 生成过程日志" width="60%">
+                    <div style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 4px; font-family: monospace; height: 400px; overflow-y: auto; white-space: pre-wrap;">
+                        <div v-for="(log, index) in generationLogs" :key="index">{{ log }}</div>
+                    </div>
+                </el-dialog>
+
+                <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 30px; margin-bottom: 20px;">
+                        <h3 style="margin: 0;">2. 评分标准设置</h3>
+                        <el-button type="primary" plain icon="Plus" @click="addQuestion">手动添加题目</el-button>
+                    </div>
+
+                    <div v-if="questionsData.length > 0">
+                        <el-alert
+                            title="提示：您可以手动修改题目、答案和评分细则。大题总分会根据评分点自动计算。"
+                            type="info"
+                            show-icon
+                            style="margin-bottom: 20px;"
+                        ></el-alert>
+
+                        <el-card v-for="(q, qIndex) in questionsData" :key="qIndex" class="question-card">
+                        <template #header>
+                            <div class="card-header">
+                                <span>
+                                    <el-tag size="large">第 {{ q.id }} 题</el-tag>
+                                    <span class="total-score-tag">总分: {{ q.score.max }} 分</span>
+                                </span>
+                                <div>
+                                    <el-button 
+                                        :type="q.isEditing ? 'success' : 'primary'" 
+                                        size="small" 
+                                        :icon="q.isEditing ? 'Check' : 'Edit'" 
+                                        @click="toggleEdit(q)"
+                                        style="margin-right: 10px;"
+                                    >
+                                        {{ q.isEditing ? '完成' : '编辑' }}
+                                    </el-button>
+                                    <el-button type="danger" circle icon="Delete" @click="removeQuestion(qIndex)" size="small"></el-button>
+                                </div>
+                            </div>
+                        </template>
+                        
+                        <div v-if="q.isEditing">
+                            <el-form label-position="top">
+                                <el-form-item label="题目内容">
+                                    <el-input v-model="q.question" type="textarea" :autosize="{ minRows: 4, maxRows: 15 }"></el-input>
+                                </el-form-item>
+                                <el-form-item label="参考答案 (LaTeX)">
+                                    <el-input v-model="q.answer" type="textarea" :autosize="{ minRows: 6, maxRows: 20 }"></el-input>
+                                </el-form-item>
+                                
+                                <el-divider content-position="left">评分细则</el-divider>
+                                
+                                <div v-for="(criterion, cIndex) in q.score.criteria" :key="cIndex" class="criteria-row">
+                                    <el-row :gutter="10">
+                                        <el-col :span="16">
+                                            <el-input v-model="criterion.description" placeholder="评分标准描述"></el-input>
+                                        </el-col>
+                                        <el-col :span="6">
+                                            <el-input-number 
+                                                v-model="criterion.points" 
+                                                :min="0" 
+                                                :step="0.5" 
+                                                @change="updateTotalScore(qIndex)"
+                                                style="width: 100%"
+                                            ></el-input-number>
+                                        </el-col>
+                                        <el-col :span="2">
+                                            <el-button type="danger" icon="Delete" circle plain @click="removeCriterion(qIndex, cIndex)"></el-button>
+                                        </el-col>
+                                    </el-row>
+                                </div>
+                                
+                                <div style="margin-top: 10px;">
+                                    <el-button type="primary" plain size="small" icon="Plus" @click="addCriterion(qIndex)">添加评分点</el-button>
+                                </div>
+                            </el-form>
+                        </div>
+                        <div v-else>
+                            <div style="margin-bottom: 15px;">
+                                <strong>题目：</strong>
+                                <div v-markdown="q.question" style="padding: 10px; background: #f9f9f9; border-radius: 4px;"></div>
+                            </div>
+                            <div style="margin-bottom: 15px;">
+                                <strong>参考答案：</strong>
+                                <div v-markdown="q.answer" style="padding: 10px; background: #f0f9eb; border-radius: 4px;"></div>
+                            </div>
+                            
+                            <!-- 审核反馈显示 -->
+                            <div v-if="q.feedback" style="margin-bottom: 15px; border: 1px solid #e6a23c; background-color: #fdf6ec; border-radius: 4px; padding: 10px;">
+                                <strong style="color: #e6a23c; display: flex; align-items: center;">
+                                    <el-icon style="margin-right: 5px;"><Warning /></el-icon> 教授审核反馈 (仅供参考)
+                                </strong>
+                                <div v-markdown="q.feedback" style="margin-top: 5px; font-size: 14px; color: #606266;"></div>
+                            </div>
+
+                            <div>
+                                <strong>评分细则：</strong>
+                                <el-table :data="q.score.criteria" border size="small" style="margin-top: 5px;">
+                                    <el-table-column label="描述" prop="description">
+                                        <template #default="scope">
+                                            <div v-markdown="scope.row.description"></div>
+                                        </template>
+                                    </el-table-column>
+                                    <el-table-column label="分数" prop="points" width="100" align="center"></el-table-column>
+                                </el-table>
+                            </div>
+                        </div>
+                    </el-card>
+
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <el-button type="success" plain icon="Plus" @click="addQuestion">添加新题目</el-button>
+                    </div>
+
+                    <div class="step-actions">
+                        <el-button type="primary" size="large" @click="confirmStep1">
+                            确认并进入下一步 <el-icon class="el-icon--right"><ArrowRight /></el-icon>
+                        </el-button>
+                    </div>
+                    </div>
+                    <el-empty v-else description="暂无题目，请上方输入文字生成或点击右上角手动添加"></el-empty>
+                </div>
+            </div>
+
+            <!-- 步骤 2: 阅卷与结果 -->
+            <div v-if="activeStep === 1">
+                <div class="input-area">
+                    <h3>3. 上传答卷 PDF</h3>
+                    <el-upload
+                        class="upload-demo"
+                        drag
+                        action="#"
+                        multiple
+                        :auto-upload="false"
+                        :on-change="handleFileChange"
+                        :on-remove="handleFileRemove"
+                        :file-list="fileList"
+                        accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp"
+                    >
+                        <el-icon class="el-icon--upload"><upload-filled /></el-icon>
+                        <div class="el-upload__text">
+                            拖拽文件到此处或 <em>点击上传</em>
+                        </div>
+                        <template #tip>
+                            <div class="el-upload__tip">
+                                支持批量上传多个 PDF 或图片文件（图片仅支持单页）
+                            </div>
+                        </template>
+                    </el-upload>
+                    
+                    <!-- 混合试卷智能拆分工具栏 -->
+                    <div style="margin-top: 15px; border: 1px dashed #e6a23c; background-color: #fdf6ec; padding: 15px; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="font-weight: bold; color: #e6a23c; margin-bottom: 5px; display: flex; align-items: center;">
+                                    <el-icon style="margin-right: 6px;"><Scissor /></el-icon> 混合试卷智能拆分
+                                </div>
+                                <div style="font-size: 13px; color: #606266; line-height: 1.6;">
+                                    如果您上传的 <b>单个 PDF 文件包含了多位学生的答卷</b>（例如全班作业扫描在一个文件里），<br>
+                                    请上传后直接点击右侧按钮。系统将自动识别每位学生的起始页，将其拆分为独立文件并替换原文件。
+                                </div>
+                            </div>
+                            <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                                <el-button 
+                                    type="warning" 
+                                    size="default" 
+                                    @click="splitCurrentFiles" 
+                                    :loading="splitting"
+                                    :disabled="fileList.length === 0"
+                                    style="font-weight: bold;"
+                                >
+                                    <el-icon style="margin-right: 5px;"><MagicStick /></el-icon> 智能拆分当前列表 PDF
+                                </el-button>
+                                <el-button 
+                                    v-if="lastSplitResult" 
+                                    type="primary" 
+                                    link 
+                                    size="small" 
+                                    @click="downloadLastSplitZip"
+                                    style="margin-top: 5px;"
+                                >
+                                    下载最近一次拆分结果 (ZIP)
+                                </el-button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 20px;">
+                        <el-card shadow="never" style="background-color: #f8f9fa;">
+                            <template #header>
+                                <div class="card-header">
+                                    <span style="font-weight: bold; color: #303133;">阅卷设置</span>
+                                </div>
+                            </template>
+                            
+                            <el-form label-position="left" label-width="100px">
+                                <el-form-item label="分题策略">
+                                    <el-radio-group v-model="segmentationMode">
+                                        <el-radio label="page_per_question" border>
+                                            <span style="font-weight: bold;">每页一题</span>
+                                            <span style="font-size: 12px; color: #909399; margin-left: 5px;">(整页作为答案)</span>
+                                        </el-radio>
+                                        <el-radio label="auto_segment" border>
+                                            <span style="font-weight: bold;">AI 自动分题</span>
+                                            <span style="font-size: 12px; color: #909399; margin-left: 5px;">(实验性，可能存在误差)</span>
+                                        </el-radio>
+                                    </el-radio-group>
+                                </el-form-item>
+
+                                <el-form-item label="学号识别">
+                                    <el-checkbox v-model="useOcrStudentId" label="从 PDF 首页识别学号" border></el-checkbox>
+                                    <div style="font-size: 12px; color: #909399; margin-top: 5px;">
+                                        未勾选时，将直接使用文件名（不含扩展名）作为学号。
+                                    </div>
+                                </el-form-item>
+                            </el-form>
+                        </el-card>
+                    </div>
+
+                    <div style="margin-top: 20px; text-align: center;">
+                        <el-button type="primary" size="large" @click="startGrading" :loading="isGrading" :disabled="fileList.length === 0">
+                            开始批量阅卷
+                        </el-button>
+                        <!-- 取消任务按钮已暂时隐藏 -->
+                        <!-- <el-button type="danger" size="large" @click="stopGrading" v-if="isGrading || splitting" icon="CircleClose">
+                            停止任务
+                        </el-button> -->
+                    </div>
+
+                    <div v-if="isGrading || gradingProgress > 0" style="margin-top: 20px;">
+                        <el-progress :percentage="gradingProgress" :format="progressFormat"></el-progress>
+                        <p style="text-align: center; color: #909399;">{{ gradingStatus }}</p>
+                    </div>
+                </div>
+
+                <div v-if="gradingResults.length > 0">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 30px; margin-bottom: 10px;">
+                        <h3 style="margin: 0;">4. 成绩汇总</h3>
+                        <div>
+                            <el-button type="success" icon="Download" @click="exportExcel">下载成绩单 (Excel)</el-button>
+                            <el-button type="warning" icon="Download" @click="exportZip">下载所有详情 (ZIP)</el-button>
+                        </div>
+                    </div>
+                    
+                    <el-table :data="gradingResults" style="width: 100%; margin-bottom: 20px;" border stripe>
+                        <el-table-column prop="student_id" label="学号" width="180" sortable></el-table-column>
+                        <el-table-column prop="total_score" label="总分" width="120" sortable>
+                            <template #default="scope">
+                                <span style="font-weight: bold; color: #F56C6C">{{ scope.row.total_score }}</span> / {{ scope.row.max_score }}
+                            </template>
+                        </el-table-column>
+                        <!-- 动态生成题目列 -->
+                        <el-table-column v-for="q in questionsData" :key="q.id" :label="'第' + q.id + '题'" align="center">
+                            <template #default="scope">
+                                {{ getQuestionScore(scope.row, q.id) }}
+                            </template>
+                        </el-table-column>
+                    </el-table>
+
+                    <h3>5. 详细评语</h3>
+                    <el-collapse accordion>
+                        <el-collapse-item v-for="(result, index) in gradingResults" :key="index" :name="index">
+                            <template #title>
+                                <span style="font-weight: bold; margin-right: 10px; margin-left: 10px;">{{ result.student_id }}</span>
+                                <el-tag type="danger">{{ result.total_score }} 分</el-tag>
+                            </template>
+                            
+                            <div v-for="qResult in result.questions" :key="qResult.question_id" style="margin-bottom: 15px;">
+                                <h4>第 {{ qResult.question_id }} 题 (得分: {{ qResult.final_score }} / {{ qResult.max_score }})</h4>
+                                
+                                <div style="margin: 15px 0; padding: 15px; background-color: #fafafa; border-radius: 8px; border: 1px solid #ebeef5;">
+                                    <div style="font-weight: bold; margin-bottom: 10px; color: #606266;">学生答案：</div>
+                                    <div v-markdown="qResult.student_answer" style="line-height: 1.6; font-size: 14px; overflow-x: auto;"></div>
+                                </div>
+                                
+                                <el-tabs type="border-card">
+                                    <el-tab-pane label="评分详情">
+                                        <el-table :data="qResult.details.criteria_details" border size="small">
+                                            <el-table-column label="评分标准" min-width="150">
+                                                <template #default="scope">
+                                                    <div v-markdown="scope.row.description"></div>
+                                                </template>
+                                            </el-table-column>
+                                            
+                                            <el-table-column label="评语与申诉" min-width="300">
+                                                <template #default="scope">
+                                                    <div style="margin-bottom: 8px;">
+                                                        <el-tag size="small" type="info">老师理由</el-tag>
+                                                        <el-input 
+                                                            v-model="scope.row.teacher_reason" 
+                                                            type="textarea" 
+                                                            :rows="2" 
+                                                            placeholder="老师理由"
+                                                            style="margin-top: 5px;"
+                                                        ></el-input>
+                                                    </div>
+                                                    
+                                                    <div v-if="scope.row.student_argument" style="margin-bottom: 8px; background: #fdf6ec; padding: 5px; border-radius: 4px;">
+                                                        <el-tag size="small" type="warning">学生申诉</el-tag>
+                                                        <div style="font-size: 13px; color: #e6a23c; margin-top: 4px;">{{ scope.row.student_argument }}</div>
+                                                    </div>
+                                                    
+                                                    <div v-if="scope.row.principal_reason" style="margin-bottom: 8px; background: #fef0f0; padding: 5px; border-radius: 4px;">
+                                                        <el-tag size="small" type="danger">校长裁决</el-tag>
+                                                        <div style="font-size: 13px; color: #f56c6c; margin-top: 4px;">{{ scope.row.principal_reason }}</div>
+                                                    </div>
+                                                </template>
+                                            </el-table-column>
+
+                                            <el-table-column label="最终得分" width="160" align="center">
+                                                <template #default="scope">
+                                                    <el-input-number 
+                                                        v-model="scope.row.final_score" 
+                                                        :min="0" 
+                                                        :max="scope.row.max_points"
+                                                        :step="0.5" 
+                                                        size="small"
+                                                        @change="handleScoreChange(result, qResult)"
+                                                    ></el-input-number>
+                                                    <div style="font-size: 12px; color: #909399; margin-top: 4px;">
+                                                        (满分: {{ scope.row.max_points }})
+                                                    </div>
+                                                </template>
+                                            </el-table-column>
+                                        </el-table>
+                                    </el-tab-pane>
+                                    
+                                    <el-tab-pane label="AI 详细分析">
+                                        <div v-if="qResult.details.markdown_content" style="padding: 10px;">
+                                            <div v-if="qResult.details.markdown_content.teacher">
+                                                <h4 style="margin-top: 0; color: #409EFF;">👨‍🏫 老师评分详情</h4>
+                                                <div v-markdown="qResult.details.markdown_content.teacher" style="background: #f0f9eb; padding: 10px; border-radius: 4px;"></div>
+                                            </div>
+                                            
+                                            <div v-if="qResult.details.markdown_content.student">
+                                                <el-divider></el-divider>
+                                                <h4 style="color: #E6A23C;">🧑‍🎓 学生申诉详情</h4>
+                                                <div v-markdown="qResult.details.markdown_content.student" style="background: #fdf6ec; padding: 10px; border-radius: 4px;"></div>
+                                            </div>
+                                            
+                                            <div v-if="qResult.details.markdown_content.principal">
+                                                <el-divider></el-divider>
+                                                <h4 style="color: #F56C6C;">⚖️ 校长裁决详情</h4>
+                                                <div v-markdown="qResult.details.markdown_content.principal" style="background: #fef0f0; padding: 10px; border-radius: 4px;"></div>
+                                            </div>
+                                        </div>
+                                        <div v-else style="text-align: center; color: #909399; padding: 20px;">
+                                            暂无详细分析数据
+                                        </div>
+                                    </el-tab-pane>
+                                </el-tabs>
+                            </div>
+                        </el-collapse-item>
+                    </el-collapse>
+                </div>
+
+                <div class="step-actions">
+                    <el-button @click="activeStep = 0" :disabled="isGrading">返回修改题目</el-button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 拆分试卷对话框已移除 (In-Place Mode) -->
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, watch } = Vue;
+        const { ElMessage, ElMessageBox } = ElementPlus;
+
+        const app = createApp({
+            setup() {
+                const activeStep = ref(0);
+                const questionsText = ref("");
+                const generating = ref(false);
+                const questionsData = ref([]);
+                const stateFileInput = ref(null);
+                const generationLogs = ref([]);
+                const logsVisible = ref(false);
+                
+                // 拆分相关
+                const splitting = ref(false);
+                const lastSplitResult = ref(null);
+
+                // 阅卷相关状态
+                const fileList = ref([]);
+                const isGrading = ref(false);
+                const gradingProgress = ref(0);
+                const gradingStatus = ref("");
+                const gradingResults = ref([]);
+                const useOcrStudentId = ref(false);
+                const segmentationMode = ref("page_per_question");
+                
+                // AbortController for cancellation
+                let abortController = null;
+
+                // 文件处理
+                const handleFileChange = (file, fileListValue) => {
+                    fileList.value = fileListValue;
+                };
+                const handleFileRemove = (file, fileListValue) => {
+                    fileList.value = fileListValue;
+                };
+
+                const fileToBase64 = (file) => {
+                    return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.readAsDataURL(file);
+                        reader.onload = () => {
+                            // Remove "data:application/pdf;base64," prefix
+                            const base64String = reader.result.split(',')[1];
+                            resolve(base64String);
+                        };
+                        reader.onerror = error => reject(error);
+                    });
+                };
+
+                // 存储当前活跃的 task_id 列表，用于取消
+                let activeTaskIds = [];
+                
+                const stopGrading = async () => {
+                    if (abortController) {
+                        // 1. 先取消前端请求
+                        abortController.abort();
+                        
+                        // 2. 通知后端取消所有活跃任务
+                        const cancelPromises = activeTaskIds.map(taskId => 
+                            axios.post(`/api/v1/cancel-task/${taskId}`).catch(e => {
+                                console.log(`Failed to cancel task ${taskId}:`, e);
+                            })
+                        );
+                        await Promise.allSettled(cancelPromises);
+                        
+                        ElMessage.warning('用户已终止操作，正在取消后台任务...');
+                        isGrading.value = false;
+                        splitting.value = false;
+                        gradingStatus.value = '已取消';
+                        activeTaskIds = [];
+                        // 延迟清除 controller，确保所有 pending 请求能检测到 abort 信号
+                        setTimeout(() => { abortController = null; }, 100);
+                    }
+                };
+
+                // 页面刷新/关闭时取消所有进行中的请求
+                window.addEventListener('beforeunload', (event) => {
+                    if (abortController) {
+                        abortController.abort();
+                        // 使用 sendBeacon 发送取消请求（异步但不阻塞页面关闭）
+                        activeTaskIds.forEach(taskId => {
+                            navigator.sendBeacon(`/api/v1/cancel-task/${taskId}`);
+                        });
+                    }
+                });
+
+                // 开始批量阅卷
+                const startGrading = async () => {
+                    if (fileList.value.length === 0) return;
+                    
+                    abortController = new AbortController();
+                    activeTaskIds = [];
+                    isGrading.value = true;
+                    gradingResults.value = [];
+                    gradingProgress.value = 0;
+                    
+                    const totalFiles = fileList.value.length;
+                    let completedCount = 0;
+                    
+                    // 并发控制：最大并发数 (建议 3-5，避免浏览器请求阻塞)
+                    const CONCURRENCY_LIMIT = 3;
+                    gradingStatus.value = `准备开始批改 ${totalFiles} 个文件 (并行数: ${CONCURRENCY_LIMIT})...`;
+
+                    // 辅助函数：处理单个文件
+                    const processFile = async (fileObj, fileIndex) => {
+                         if (abortController.signal.aborted) return;
+                         
+                         // 生成唯一的 task_id
+                         const taskId = `task_${Date.now()}_${fileIndex}_${fileObj.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+                         activeTaskIds.push(taskId);
+                         
+                         try {
+                            // Convert file to base64
+                            const base64Data = await fileToBase64(fileObj.raw);
+                            
+                            // Prepare payload with task_id
+                            const payload = {
+                                student_file: {
+                                    base64_data: base64Data,
+                                    filename: fileObj.name
+                                },
+                                questions: questionsData.value,
+                                use_ocr_student_id: useOcrStudentId.value,
+                                segmentation_mode: segmentationMode.value,
+                                task_id: taskId
+                            };
+                            
+                            // Call API
+                            const response = await axios.post('/api/v1/grade', payload, {
+                                signal: abortController.signal
+                            });
+                            
+                            // 检查是否被取消
+                            if (response.data.cancelled) {
+                                console.log(`Task ${taskId} was cancelled on server`);
+                                return;
+                            }
+                            
+                            if (response.data.success) {
+                                // Add filename (without extension)
+                                const fileNameNoExt = fileObj.name.replace(/\.[^/.]+$/, "");
+                                const resultWithFilename = { ...response.data, filename: fileNameNoExt };
+                                gradingResults.value.push(resultWithFilename);
+
+                                // 显示警告信息
+                                if (response.data.warnings && response.data.warnings.length > 0) {
+                                    const warningMsg = response.data.warnings.join('<br>');
+                                    ElMessage({
+                                        message: `<strong>文件 ${fileObj.name} 警告:</strong><br>${warningMsg}`,
+                                        type: 'warning',
+                                        dangerouslyUseHTMLString: true,
+                                        duration: 5000
+                                    });
+                                }
+                            } else {
+                                ElMessage.error(`文件 ${fileObj.name} 批改失败: ${response.data.error}`);
+                                // Add filename (without extension)
+                                const fileNameNoExt = fileObj.name.replace(/\.[^/.]+$/, "");
+                                gradingResults.value.push({
+                                    filename: fileNameNoExt,
+                                    student_id: "Error: " + fileObj.name,
+                                    total_score: 0,
+                                    max_score: 0,
+                                    questions: []
+                                });
+                            }
+                            
+                        } catch (error) {
+                            // 检测取消：新版 axios + AbortController 使用 error.code 或 error.name
+                            if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError' || axios.isCancel(error)) {
+                                console.log('Request canceled:', fileObj.name);
+                                return;
+                            }
+                            console.error(error);
+                            ElMessage.error(`文件 ${fileObj.name} 请求出错`);
+                            // Add filename (without extension)
+                            const fileNameNoExt = fileObj.name.replace(/\.[^/.]+$/, "");
+                            gradingResults.value.push({
+                                filename: fileNameNoExt,
+                                student_id: "Error: " + fileObj.name,
+                                total_score: 0,
+                                max_score: 0,
+                                questions: []
+                            });
+                        } finally {
+                             // 从活跃任务列表中移除
+                             const idx = activeTaskIds.indexOf(taskId);
+                             if (idx > -1) activeTaskIds.splice(idx, 1);
+                             
+                             // 安全检查：abortController 可能已被清除
+                             if (abortController && !abortController.signal.aborted) {
+                                 completedCount++;
+                                 gradingProgress.value = Math.round((completedCount / totalFiles) * 100);
+                                 gradingStatus.value = `正在批改... (已完成 ${completedCount} / ${totalFiles})`;
+                             }
+                        }
+                    };
+                    
+                    // 执行并发队列 (Semaphore Pattern)
+                    const executing = [];
+                    for (let i = 0; i < totalFiles; i++) {
+                        if (abortController.signal.aborted) break;
+                        
+                        const p = processFile(fileList.value[i], i);
+                        executing.push(p);
+                        
+                        // 当任务完成时从队列移除
+                        const clean = () => executing.splice(executing.indexOf(p), 1);
+                        p.then(clean).catch(clean);
+                        
+                        if (executing.length >= CONCURRENCY_LIMIT) {
+                            await Promise.race(executing);
+                        }
+                    }
+                    
+                    await Promise.all(executing);
+                    
+                    // 检查是否被取消（需要安全检查 abortController 是否存在）
+                    if (abortController && !abortController.signal.aborted) {
+                        isGrading.value = false;
+                        gradingStatus.value = "批改完成！";
+                        ElMessage.success("所有文件批改完成");
+                    }
+                    // 清除 controller
+                    abortController = null;
+                };
+
+                const progressFormat = (percentage) => {
+                    return percentage === 100 ? '完成' : `${percentage}%`;
+                };
+
+                const getQuestionScore = (row, questionId) => {
+                    if (!row.questions) return '-';
+                    const q = row.questions.find(item => item.question_id === questionId);
+                    return q ? q.final_score : '-';
+                };
+
+                // 处理分数变化
+                const handleScoreChange = (studentResult, questionResult) => {
+                    // 1. 重新计算该题总分
+                    if (questionResult.details && questionResult.details.criteria_details) {
+                        const newQScore = questionResult.details.criteria_details.reduce((sum, item) => {
+                            return sum + (item.final_score || 0);
+                        }, 0);
+                        questionResult.final_score = newQScore;
+                    }
+
+                    // 2. 重新计算学生总分
+                    if (studentResult.questions) {
+                        const newTotalScore = studentResult.questions.reduce((sum, q) => {
+                            return sum + (q.final_score || 0);
+                        }, 0);
+                        studentResult.total_score = newTotalScore;
+                    }
+                };
+
+                // 导出 Excel
+                const exportExcel = () => {
+                    try {
+                        // 1. 准备表头
+                        const headers = ["文件名", "学号", "总分"];
+                        questionsData.value.forEach(q => {
+                            headers.push(`第${q.id}题`);
+                        });
+
+                        // 2. 准备数据行
+                        const data = gradingResults.value.map(row => {
+                            const rowData = {
+                                "文件名": row.filename || '-',
+                                "学号": row.student_id,
+                                "总分": row.total_score
+                            };
+                            questionsData.value.forEach(q => {
+                                rowData[`第${q.id}题`] = getQuestionScore(row, q.id);
+                            });
+                            return rowData;
+                        });
+
+                        // 3. 创建工作簿
+                        const ws = XLSX.utils.json_to_sheet(data, { header: headers });
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, "成绩单");
+
+                        // 4. 导出
+                        XLSX.writeFile(wb, "成绩汇总表.xlsx");
+                        ElMessage.success("Excel 导出成功");
+                    } catch (error) {
+                        console.error(error);
+                        ElMessage.error("导出 Excel 失败");
+                    }
+                };
+
+                // 导出 ZIP
+                const exportZip = async () => {
+                    try {
+                        const zip = new JSZip();
+                        
+                        // 添加每个学生的 JSON 文件
+                        gradingResults.value.forEach(result => {
+                            const fileName = `${result.student_id}_grading.json`;
+                            zip.file(fileName, JSON.stringify(result, null, 2));
+                        });
+
+                        // 生成并下载
+                        const content = await zip.generateAsync({ type: "blob" });
+                        saveAs(content, "批改详情打包.zip");
+                        ElMessage.success("ZIP 打包下载成功");
+                    } catch (error) {
+                        console.error(error);
+                        ElMessage.error("导出 ZIP 失败");
+                    }
+                };
+
+                // 生成答案
+                const generateAnswers = async () => {
+                    if (!questionsText.value.trim()) {
+                        ElMessage.warning("请先输入题目内容");
+                        return;
+                    }
+                    
+                    generating.value = true;
+                    try {
+                        const response = await axios.post('/api/v1/generate-answers', {
+                            questions_text: questionsText.value,
+                            model_type: "reasoner"
+                        });
+                        
+                        if (response.data.success) {
+                            questionsData.value = response.data.questions.map(q => ({ ...q, isEditing: false }));
+                            generationLogs.value = response.data.logs || [];
+                            ElMessage.success("生成成功");
+                        } else {
+                            ElMessage.error("生成失败: " + response.data.error);
+                        }
+                    } catch (error) {
+                        ElMessage.error("请求出错: " + error.message);
+                    } finally {
+                        generating.value = false;
+                    }
+                };
+
+                const showLogs = () => {
+                    logsVisible.value = true;
+                };
+
+                // 添加题目
+                const addQuestion = () => {
+                    const newId = questionsData.value.length + 1;
+                    questionsData.value.push({
+                        id: newId,
+                        question: "新题目...",
+                        answer: "参考答案...",
+                        isEditing: true,
+                        score: {
+                            max: 0,
+                            criteria: [
+                                { description: "关键步骤1", points: 5 },
+                                { description: "关键步骤2", points: 5 }
+                            ]
+                        }
+                    });
+                    updateTotalScore(questionsData.value.length - 1);
+                };
+
+                // 删除题目
+                const removeQuestion = (index) => {
+                    questionsData.value.splice(index, 1);
+                    // 重排 ID
+                    questionsData.value.forEach((q, i) => {
+                        q.id = i + 1;
+                    });
+                };
+
+                // 添加评分点
+                const addCriterion = (qIndex) => {
+                    questionsData.value[qIndex].score.criteria.push({
+                        description: "新评分点",
+                        points: 1
+                    });
+                    updateTotalScore(qIndex);
+                };
+
+                // 删除评分点
+                const removeCriterion = (qIndex, cIndex) => {
+                    questionsData.value[qIndex].score.criteria.splice(cIndex, 1);
+                    updateTotalScore(qIndex);
+                };
+
+                // 更新总分
+                const updateTotalScore = (qIndex) => {
+                    const q = questionsData.value[qIndex];
+                    const total = q.score.criteria.reduce((sum, c) => sum + c.points, 0);
+                    q.score.max = total;
+                };
+
+                // 确认第一步
+                const confirmStep1 = () => {
+                    if (questionsData.value.length === 0) {
+                        ElMessage.warning("请先生成或添加题目");
+                        return;
+                    }
+                    console.log("Confirmed Data:", JSON.parse(JSON.stringify(questionsData.value)));
+                    ElMessage.success("设置已确认，准备进入阅卷阶段");
+                    activeStep.value = 1; 
+                };
+
+                // Save State (ZIP)
+                const saveState = async () => {
+                    try {
+                        const zip = new JSZip();
+                        const state = {
+                            version: 1,
+                            activeStep: activeStep.value,
+                            questionsText: questionsText.value,
+                            questionsData: questionsData.value,
+                            gradingResults: gradingResults.value,
+                            useOcrStudentId: useOcrStudentId.value,
+                            segmentationMode: segmentationMode.value,
+                            fileMetadata: fileList.value.map(f => ({
+                                name: f.name,
+                                type: f.raw ? f.raw.type : 'application/pdf',
+                                uid: f.uid
+                            }))
+                        };
+                        zip.file("state.json", JSON.stringify(state, null, 2));
+                        
+                        // Add files
+                        if (fileList.value.length > 0) {
+                            const filesFolder = zip.folder("files");
+                            for (const f of fileList.value) {
+                                if (f.raw) {
+                                    filesFolder.file(f.name, f.raw);
+                                }
+                            }
+                        }
+                        
+                        const content = await zip.generateAsync({ type: "blob" });
+                        saveAs(content, "grading_system_state.zip");
+                        ElMessage.success("系统状态已保存");
+                    } catch (e) {
+                        console.error(e);
+                        ElMessage.error("保存失败: " + e.message);
+                    }
+                };
+
+                // Load State (ZIP)
+                const triggerLoadState = () => {
+                    stateFileInput.value.click();
+                };
+
+                const loadState = async (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    
+                    try {
+                        const zip = await JSZip.loadAsync(file);
+                        
+                        // Load state.json
+                        const stateFile = zip.file("state.json");
+                        if (!stateFile) throw new Error("无效的存档文件");
+                        
+                        const stateStr = await stateFile.async("string");
+                        const state = JSON.parse(stateStr);
+                        
+                        // Restore simple state
+                        activeStep.value = state.activeStep || 0;
+                        questionsText.value = state.questionsText || "";
+                        questionsData.value = state.questionsData || [];
+                        gradingResults.value = state.gradingResults || [];
+                        useOcrStudentId.value = state.useOcrStudentId !== undefined ? state.useOcrStudentId : false;
+                        segmentationMode.value = state.segmentationMode || "page_per_question";
+                        
+                        // Restore files
+                        const newFileList = [];
+                        const filesFolder = zip.folder("files");
+                        if (filesFolder && state.fileMetadata) {
+                            for (const meta of state.fileMetadata) {
+                                const fileInZip = filesFolder.file(meta.name);
+                                if (fileInZip) {
+                                    const blob = await fileInZip.async("blob");
+                                    const restoredFile = new File([blob], meta.name, { type: meta.type });
+                                    newFileList.push({
+                                        name: meta.name,
+                                        uid: meta.uid || Date.now() + Math.random(),
+                                        status: 'ready',
+                                        percentage: 0,
+                                        raw: restoredFile
+                                    });
+                                }
+                            }
+                        }
+                        fileList.value = newFileList;
+                        
+                        ElMessage.success("状态已加载");
+                    } catch (e) {
+                        console.error(e);
+                        ElMessage.error("加载失败: " + e.message);
+                    }
+                    event.target.value = '';
+                };
+
+                // Clear All
+                const clearAll = () => {
+                    questionsData.value = [];
+                    questionsText.value = "";
+                    fileList.value = [];
+                    gradingResults.value = [];
+                    activeStep.value = 0;
+                    ElMessage.success("已清空");
+                };
+
+                // 智能拆分当前列表
+                const splitCurrentFiles = async () => {
+                    if (fileList.value.length === 0) {
+                        ElMessage.warning("请先上传要拆分的 PDF 文件");
+                        return;
+                    }
+
+                    if (questionsData.value.length === 0) {
+                        ElMessage.warning("拆分功能依赖题目信息来识别新试卷，请先生成或添加题目");
+                        return;
+                    }
+                    
+                    try {
+                        await ElMessageBox.confirm(
+                            '系统将分析列表中的 PDF 文件，尝试按照题目信息将其拆分为独立的学生答卷。\n拆分成功后，原文件将被替换为拆分后的多个文件。\n\n建议：适用于将全班试卷扫描在同一个 PDF 中的情况。',
+                            '确认执行智能拆分',
+                            { confirmButtonText: '开始拆分', cancelButtonText: '取消', type: 'warning' }
+                        );
+                    } catch {
+                        return;
+                    }
+
+                    abortController = new AbortController();
+                    splitting.value = true;
+                    // 保存当前的题目信息供后端参考
+                    const questionsJson = JSON.stringify(questionsData.value);
+                    const newFileList = [];
+                    let hasError = false;
+
+                    try {
+                        // 遍历当前文件列表
+                        for (let i = 0; i < fileList.value.length; i++) {
+                            if (abortController.signal.aborted) break;
+                            const originalFileObj = fileList.value[i];
+                            const rawFile = originalFileObj.raw;
+
+                            if (!rawFile || rawFile.type !== 'application/pdf') {
+                                // 非 PDF 跳过
+                                newFileList.push(originalFileObj);
+                                continue;
+                            }
+
+                            try {
+                                ElMessage.info(`正在分析拆分: ${rawFile.name} ...`);
+                                
+                                const formData = new FormData();
+                                formData.append('file', rawFile);
+                                formData.append('questions_json', questionsJson);
+
+                                const response = await axios.post('/api/v1/split-pdf', formData, {
+                                    responseType: 'blob',
+                                    signal: abortController.signal
+                                });
+
+                        
+                        // 1. 将下载链接保存起来，改为手动下载
+                        const zipFilename = `${rawFile.name.replace(/\.pdf$/i, '')}_split.zip`;
+                        lastSplitResult.value = {
+                            blob: response.data,
+                            filename: zipFilename
+                        };
+                        
+                        // 2. 解压 ZIP 并加载到列表
+                                const zip = await JSZip.loadAsync(response.data);
+                                const splitPromises = [];
+                                
+                                zip.forEach((relativePath, zipEntry) => {
+                                    // 过滤掉文件夹和 manifest json
+                                    if (zipEntry.dir || zipEntry.name.endsWith('split_manifest.json')) return;
+                                    
+                                    // 仅处理 PDF 文件 (后端已更新为输出 PDF)
+                                    if (!zipEntry.name.toLowerCase().endsWith('.pdf')) return;
+                                    
+                                    const p = zipEntry.async('blob').then(blob => {
+                                        const newFile = new File([blob], zipEntry.name, { type: 'application/pdf' });
+                                        return {
+                                            name: zipEntry.name,
+                                            uid: Date.now() + Math.random(),
+                                            status: 'ready',
+                                            percentage: 0,
+                                            raw: newFile
+                                        };
+                                    });
+                                    splitPromises.push(p);
+                                });
+
+                                const extractedFiles = await Promise.all(splitPromises);
+
+                                if (extractedFiles.length > 0) {
+                                    newFileList.push(...extractedFiles);
+                                    ElMessage.success(`${rawFile.name} 已成功拆分为 ${extractedFiles.length} 份答卷`);
+                                } else {
+                                    // 如果没有拆分出结果，保留原文件
+                                    newFileList.push(originalFileObj);
+                                    ElMessage.warning(`${rawFile.name} 未检测到拆分点，保留原文件`);
+                                }
+
+                            } catch (e) {
+                                // 检测取消：兼容新旧版本 axios
+                                if (e.code === 'ERR_CANCELED' || e.name === 'CanceledError' || axios.isCancel(e)) {
+                                    console.log('Split canceled');
+                                    break;
+                                }
+                                console.error(`Split error for ${rawFile.name}`, e);
+                                ElMessage.error(`拆分 ${rawFile.name} 失败，保留原文件`);
+                                newFileList.push(originalFileObj);
+                                hasError = true;
+                            }
+                        }
+
+                        // 更新文件列表
+                        fileList.value = newFileList;
+                        if (!hasError) {
+                            ElMessage.success("所有文件处理完毕");
+                        }
+
+                    } catch (e) {
+                        console.error(e);
+                        ElMessage.error("系统处理出错");
+                    } finally {
+                        splitting.value = false;
+                        // 延迟清除 controller
+                        setTimeout(() => { abortController = null; }, 100);
+                    }
+                };
+
+                // Toggle Edit
+                const toggleEdit = (q) => {
+                    q.isEditing = !q.isEditing;
+                };
+
+                return {
+                    activeStep,
+                    questionsText,
+                    generating,
+                    questionsData,
+                    stateFileInput,
+                    generationLogs,
+                    logsVisible,
+                    // 阅卷相关
+                    fileList,
+                    isGrading,
+                    gradingProgress,
+                    gradingStatus,
+                    gradingResults,
+                    segmentationMode,
+                    useOcrStudentId,
+                    
+                    handleFileChange,
+                    handleFileRemove,
+                    startGrading,
+                    stopGrading,
+                    progressFormat,
+                    getQuestionScore,
+                    handleScoreChange,
+                    exportExcel,
+                    exportZip,
+                    // 原有方法
+                    generateAnswers,
+                    addQuestion,
+                    removeQuestion,
+                    addCriterion,
+                    removeCriterion,
+                    updateTotalScore,
+                    confirmStep1,
+                    saveState,
+                    triggerLoadState,
+                    loadState,
+                    clearAll,
+                    toggleEdit,
+                    showLogs,
+                    // 拆分 (New In-Place)
+                    splitting,
+                    splitCurrentFiles,
+                    lastSplitResult,
+                    downloadLastSplitZip: () => {
+                        if (lastSplitResult.value) {
+                            saveAs(lastSplitResult.value.blob, lastSplitResult.value.filename);
+                        }
+                    }
+                };
+            }
+        });
+
+        // 自定义指令：渲染 Markdown + MathJax
+        app.directive('markdown', {
+            mounted(el, binding) {
+                renderContent(el, binding.value);
+            },
+            updated(el, binding) {
+                if (binding.value !== binding.oldValue) {
+                    renderContent(el, binding.value);
+                }
+            }
+        });
+
+        const renderContent = (el, text) => {
+            if (!text) {
+                el.innerHTML = '';
+                return;
+            }
+
+            // DEBUG: Log raw text for inspection
+            // console.log("Render Content Input:", text);
+            
+            try {
+                // Check if marked is available
+                if (typeof marked === 'undefined') {
+                    el.innerText = text;
+                    return;
+                }
+
+                // 0. Pre-process
+                let processedText = text;
+
+                // 1. Protect Math & Fix Braces (Frontend Failsafe)
+                const mathMap = {};
+                let mathId = 0;
+
+                const balanceBraces = (tex) => {
+                    if (!tex) return "";
+                    let depth = 0;
+                    let newTex = "";
+                    for(let i=0; i<tex.length; i++) {
+                        let c = tex[i];
+                        if(c === '\\') {
+                            newTex += c;
+                            if(i+1 < tex.length) { newTex += tex[++i]; }
+                            continue;
+                        }
+                        if(c === '{') depth++;
+                        if(c === '}') {
+                            if(depth <= 0) continue; // Skip extra closing brace
+                            depth--;
+                        }
+                        newTex += c;
+                    }
+                    while(depth > 0) {
+                        newTex += '}';
+                        depth--;
+                    }
+                    return newTex;
+                };
+                
+                const replaceMath = (str, regex, wrapper1, wrapper2) => {
+                    return str.replace(regex, (match, content) => {
+                        const id = `MATHSECRET_${mathId++}_END`;
+                        // Apply failsafe brace balancing
+                        const fixedContent = balanceBraces(content);
+                        // Reconstruct specific wrapper if needed, or use what was matched
+                        // But regex might differ. 
+                        // Let's store the full fixed string in map
+                        const fixedMatch = wrapper1 + fixedContent + wrapper2;
+                        
+                        mathMap[id] = fixedMatch;
+                        return id;
+                    });
+                };
+
+                // Note: regex needs to capture the content inside delimiters
+                let protectedText = replaceMath(processedText, /\$\$([\s\S]+?)\$\$/g, '$$', '$$');
+                // Restrict inline math to single line
+                protectedText = replaceMath(protectedText, /\$([^\n$]+?)\$/g, '$', '$');
+                protectedText = replaceMath(protectedText, /\\\(([\s\S]+?)\\\)/g, '\\(', '\\)');
+                protectedText = replaceMath(protectedText, /\\\[([\s\S]+?)\\\]/g, '\\[', '\\]');
+
+
+                // 2. Markdown parse
+                let html = marked.parse(protectedText);
+
+                // 3. Restore Math
+                Object.keys(mathMap).forEach(id => {
+                    html = html.replace(id, () => mathMap[id]);
+                });
+
+                el.innerHTML = html;
+
+                // 4. MathJax typeset
+                if (window.MathJax && window.MathJax.typesetPromise) {
+                   // Clean typeset
+                   window.MathJax.typesetClear([el]);
+                   window.MathJax.typesetPromise([el]).catch(err => {
+                       console.error('MathJax error details:', err);
+                       console.log('Failing content:', text);
+                       el.innerHTML += `<div style="color:red; font-size:12px;">MathJax Render Error: ${err.message}</div>`;
+                   });
+                }
+
+            } catch (e) {
+                console.error('Render logic error:', e);
+                el.innerText = text;
+            }
+        };
+
+        app.use(ElementPlus);
+        for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+            app.component(key, component)
+        }
+        app.mount('#app');
+    </script>
+</body>
+</html>
