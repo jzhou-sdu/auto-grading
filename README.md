@@ -14,7 +14,7 @@
 确保你已经拥有项目代码，并进入项目根目录：
 
 ```bash
-cd ai-grading
+cd auto-grading
 ```
 
 ### 2.2 安装依赖
